@@ -1,41 +1,81 @@
-import { Context, SQSEvent } from 'aws-lambda';
+import { SendMessageCommand } from '@aws-sdk/client-sqs';
+import { AppSyncIdentityCognito, AppSyncResolverEvent } from 'aws-lambda';
+import { sqsClient } from 'lib/utils/clients';
+import { updateThreadStatus } from 'lib/utils/dynamodb';
+import { MessageSystemStatus } from 'lib/utils/types';
 import { processSingleEvent } from './logic';
 
-// Constants
-const EVENT_TIMEOUT_BUFFER = 5000; // 5 second
+// Environment variables
+const { QUEUE_URL = '', TABLE_NAME = '' } = process.env;
 
-/**
- * Processes a batch of events.
- * @param event SQS event containing the batch of events to process.
- * @returns The results of the events.
- */
-export async function handler({ Records }: SQSEvent, context: Context) {
-  if (!Records || Records.length === 0) {
-    throw new Error('No records found in the event. Aborting operation.');
+export async function handler(
+  event: AppSyncResolverEvent<{
+    input: { prompt: string; threadId: string; includeAudio: boolean };
+  }>,
+  context: any,
+) {
+  console.log("Received event", JSON.stringify(event, null, 2));
+  console.log("Received context", JSON.stringify(context, null, 2));
+  const {
+    identity,
+    prev,
+    arguments: {
+      input: { prompt, includeAudio }
+    }
+  } = event;
+
+  // Condition 1: User is authenticated. If not, throw an error.
+  if (!(identity as AppSyncIdentityCognito)?.sub) {
+    throw new Error('Missing identity');
+  }
+  const id = (identity as AppSyncIdentityCognito).sub;
+
+  // Condition 2: The thread is not currently processing. If it is, throw an error.
+  if (
+    !id ||
+    (prev?.result?.status &&
+      [MessageSystemStatus.PENDING, MessageSystemStatus.PROCESSING].includes(
+        prev.result.status
+      ))
+  ) {
+    throw new Error('Thread is currently processing');
   }
 
-  // Each event gets a timeout of the remaining time divided by the number of events, this way
-  // we can ensure that we don't exceed the timeout for the lambda.
-  const eventTimeout =
-    (context.getRemainingTimeInMillis() - EVENT_TIMEOUT_BUFFER) /
-    Records.length;
+  // Condition 3: The thread ID is missing.
+  let threadId = prev?.result?.sk;
+  if (!threadId) throw new Error('That thread does not exist');
+  threadId = threadId.split('#')[1];
 
-  const processingTasks = Records.map(async (record: { body: string }) => {
-    const event = JSON.parse(record.body);
+  try {
+    // Inserts the user's request into the queue, and peforms the DynamoDB update in parallel.
+    await Promise.all([
+      updateThreadStatus({
+        userId: id,
+        threadId,
+        status: MessageSystemStatus.PENDING,
+        tableName: TABLE_NAME
+      }),
+      processSingleEvent({
+        userId: id,
+        threadId: threadId,
+        history: prev?.result.messages || [],
+        query: prompt,
+        eventTimeout: context.getRemainingTimeInMillis(),
+        persona:prev?.result.persona,
+        responseOptions: {
+          includeAudio: includeAudio
+        }
+      })
+    ]);
 
-    console.log(`Received Event: ${JSON.stringify(event)}`);
-    return processSingleEvent({
-      userId: event.identity.sub,
-      threadId: event.arguments.input.threadId,
-      history: event.prev.result.messages || [],
-      query: event.arguments.input.prompt,
-      eventTimeout: eventTimeout,
-      persona: event.prev.result.persona,
-      responseOptions: {
-        includeAudio: event.arguments.input.includeAudio
+    return {
+      message: {
+        sender: 'User',
+        message: prompt,
+        createdAt: new Date().toISOString()
       }
-    });
-  });
-
-  return Promise.all(processingTasks);
+    };
+  } catch (error) {
+    throw new Error('An error occurred');
+  }
 }

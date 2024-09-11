@@ -79,7 +79,7 @@ export class BackendStack extends cdk.Stack {
     // Lambda Data Sources
     const predictAsyncDataSource = apiConstruct.appsync.addLambdaDataSource(
       'PredictAsyncDataSource',
-      predictConstruct.queueLambda
+      predictConstruct.predictAsyncLambda
     );
 
     // DynamoDB Data Sources
@@ -129,13 +129,26 @@ export class BackendStack extends cdk.Stack {
 
     const createLambdaFunction = (
       name: string,
-      dataSource: cdk.aws_appsync.DynamoDbDataSource | appsync.LambdaDataSource
+      dataSource: cdk.aws_appsync.DynamoDbDataSource | appsync.LambdaDataSource,
+      isAsync: boolean = false
     ) => {
-      return new appsync.AppsyncFunction(this, name, {
+      let props: any = {
         name,
         api: apiConstruct.appsync,
         dataSource
-      });
+      };
+      if (isAsync) {
+        props.requestMappingTemplate = appsync.MappingTemplate.fromString(`
+          {
+            "version": "2018-05-29",
+            "operation": "Invoke",
+            "payload": $util.toJson($context),
+            "invocationType": "Event"
+          }
+        `);
+        props.responseMappingTemplate = appsync.MappingTemplate.fromString('$util.toJson($context.result)');
+      }
+      return new appsync.AppsyncFunction(this, name, props);
     };
 
     // Personas
@@ -195,7 +208,8 @@ export class BackendStack extends cdk.Stack {
 
     const predictAsyncFunction = createLambdaFunction(
       'PredictAsync',
-      predictAsyncDataSource
+      predictAsyncDataSource,
+      true
     );
 
     /*================================= Resolvers =================================*/
@@ -254,7 +268,7 @@ export class BackendStack extends cdk.Stack {
       {
         typeName: 'Mutation',
         fieldName: 'createMessageAsync',
-        pipelineConfig: [getThreadFunction, predictAsyncFunction]
+        pipelineConfig: [getThreadFunction, predictAsyncFunction],
       },
 
       // System

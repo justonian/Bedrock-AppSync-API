@@ -1,0 +1,11 @@
+{
+  "GenAI-Frontend": {
+    "BucketName": "genai-frontend-bucket83908e77-pn4lp6kwf8zl",
+    "DistributionUrl": "d1zy8eik9wqz6w.cloudfront.net"
+  },
+  "GenAI-Backend": {
+    "AuthUserPoolIdC0605E59": "us-east-1_H7Dnj7HbE",
+    "ApiGraphQLAPIURLC3CAAEBC": "https://jueifolm5jbhzi3rqfw4buccdu.appsync-api.us-east-1.amazonaws.com/graphql",
+    "AuthUserPoolClientId8216BF9A": "65lj8jcmk3vu01pem9o8391kp6"
+  }
+}
